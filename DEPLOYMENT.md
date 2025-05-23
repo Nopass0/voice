@@ -63,7 +63,7 @@ cat ssl/fullchain.pem  # Copy entire content as SSL_FULLCHAIN
 SSH into your server and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/voice-project/main/setup-production.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Nopass0/voice/main/setup-production.sh | bash
 ```
 
 Or manually setup Docker.
