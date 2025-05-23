@@ -1,0 +1,170 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,prefix={{date 'YYYYMMDD-HHmmss'}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Backend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}-backend:latest
+          labels: ${{ steps.meta.outputs.labels }}
+      
+      - name: Build and push Frontend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}-frontend:latest
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Copy files to server
+        uses: appleboy/scp-action@v0.1.5
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          source: "docker-compose.yml,nginx/,ssl/private.key,ssl/voicecxr.pro.csr,.env.example"
+          target: "/opt/voice"
+          strip_components: 0
+      
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            # Function to run commands with sudo if not root
+            run_cmd() {
+                if [ "$EUID" -ne 0 ]; then
+                    if command -v sudo &> /dev/null; then
+                        sudo "$@"
+                    else
+                        "$@"
+                    fi
+                else
+                    "$@"
+                fi
+            }
+            
+            # Install Docker if not present
+            if ! command -v docker &> /dev/null; then
+                echo "Installing Docker..."
+                curl -fsSL https://get.docker.com -o get-docker.sh
+                run_cmd sh get-docker.sh
+                rm get-docker.sh
+                run_cmd systemctl start docker
+                run_cmd systemctl enable docker
+            fi
+            
+            # Install Docker Compose if not present
+            if ! command -v docker-compose &> /dev/null; then
+                if docker compose version &> /dev/null; then
+                    echo "Using Docker Compose v2"
+                else
+                    echo "Installing Docker Compose..."
+                    run_cmd curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+                    run_cmd chmod +x /usr/local/bin/docker-compose
+                fi
+            fi
+            
+            # Create app directory if it doesn't exist
+            run_cmd mkdir -p /opt/voice
+            cd /opt/voice
+            
+            # Create .env file from secrets
+            echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" > .env
+            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+            echo "DOMAIN=voicecxr.pro" >> .env
+            echo "SSL_CERT_PATH=./ssl/fullchain.pem" >> .env
+            echo "SSL_KEY_PATH=./ssl/private.key" >> .env
+            
+            # Create SSL directory
+            mkdir -p ssl
+            
+            # Save SSL certificate if provided
+            if [ ! -z "${{ secrets.SSL_FULLCHAIN }}" ]; then
+              echo "${{ secrets.SSL_FULLCHAIN }}" > ssl/fullchain.pem
+              chmod 644 ssl/fullchain.pem
+            fi
+            
+            # Set permissions
+            chmod 600 ssl/private.key
+            
+            # Update docker-compose to use GitHub Container Registry
+            sed -i 's|build: ./backend|image: ghcr.io/${{ github.repository }}-backend:latest|g' docker-compose.yml
+            sed -i 's|build: ./frontend|image: ghcr.io/${{ github.repository }}-frontend:latest|g' docker-compose.yml
+            sed -i '/context:/d' docker-compose.yml
+            sed -i '/dockerfile:/d' docker-compose.yml
+            
+            # Login to GitHub Container Registry
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # Pull latest images
+            docker pull ghcr.io/${{ github.repository }}-backend:latest
+            docker pull ghcr.io/${{ github.repository }}-frontend:latest
+            
+            # Stop existing containers
+            docker-compose down
+            
+            # Start new containers
+            docker-compose up -d
+            
+            # Run database migrations
+            sleep 10
+            docker-compose exec -T backend bun run prisma migrate deploy || true
+            
+            # Clean up old images
+            docker image prune -f
+            
+            echo "Deployment completed successfully!"
