@@ -72,7 +72,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          source: "docker-compose.yml,nginx/,ssl/private.key,ssl/voicecxr.pro.key,.env.example"
+          source: "docker-compose.yml,nginx/,ssl/,.env.example"
           target: "/opt/voice"
           strip_components: 0
       
@@ -129,22 +129,30 @@ jobs:
             echo "SSL_CERT_PATH=./ssl/fullchain.pem" >> .env
             echo "SSL_KEY_PATH=./ssl/private.key" >> .env
             
-            # Create SSL directory
-            mkdir -p ssl
+            # Ensure SSL directory exists with correct permissions
+            run_cmd mkdir -p /opt/voice/ssl
             
-            # Save SSL certificate if provided
-            if [ ! -z "${{ secrets.SSL_FULLCHAIN }}" ]; then
-              echo "${{ secrets.SSL_FULLCHAIN }}" > ssl/fullchain.pem
-              chmod 644 ssl/fullchain.pem
+            # Set correct permissions for SSL files
+            if [ -f /opt/voice/ssl/private.key ]; then
+              run_cmd chmod 600 /opt/voice/ssl/private.key
+              run_cmd chown root:root /opt/voice/ssl/private.key
             fi
             
-            # Copy private key if voicecxr.pro.key exists
-            if [ -f ssl/voicecxr.pro.key ]; then
-              cp ssl/voicecxr.pro.key ssl/private.key
+            if [ -f /opt/voice/ssl/fullchain.pem ]; then
+              run_cmd chmod 644 /opt/voice/ssl/fullchain.pem
+              run_cmd chown root:root /opt/voice/ssl/fullchain.pem
             fi
             
-            # Set permissions
-            chmod 600 ssl/private.key ssl/voicecxr.pro.key 2>/dev/null || true
+            # Verify SSL files exist
+            if [ ! -f /opt/voice/ssl/private.key ]; then
+              echo "ERROR: SSL private key not found at /opt/voice/ssl/private.key"
+              exit 1
+            fi
+            
+            if [ ! -f /opt/voice/ssl/fullchain.pem ]; then
+              echo "ERROR: SSL certificate not found at /opt/voice/ssl/fullchain.pem"
+              exit 1
+            fi
             
             # Update docker-compose to use GitHub Container Registry
             # Download correct docker-compose.yml from repository
@@ -176,9 +184,17 @@ jobs:
             # Start new containers
             docker-compose up -d
             
+            # Wait for database to be ready
+            echo "Waiting for database to be ready..."
+            sleep 15
+            
             # Run database migrations
-            sleep 10
-            docker-compose exec -T backend bun run prisma migrate deploy || true
+            echo "Running database migrations..."
+            docker-compose exec -T backend bun run prisma db push || {
+              echo "Failed to run migrations, retrying..."
+              sleep 10
+              docker-compose exec -T backend bun run prisma db push || echo "Migration failed, manual intervention may be required"
+            }
             
             # Clean up old images
             docker image prune -f
