@@ -46,7 +46,7 @@ jobs:
         with:
           context: ./backend
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-backend:latest
+          tags: ${{ env.REGISTRY }}/nopass0/voice-backend:latest
           labels: ${{ steps.meta.outputs.labels }}
       
       - name: Build and push Frontend Docker image
@@ -54,7 +54,7 @@ jobs:
         with:
           context: ./frontend
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}-frontend:latest
+          tags: ${{ env.REGISTRY }}/nopass0/voice-frontend:latest
           labels: ${{ steps.meta.outputs.labels }}
 
   deploy:
@@ -142,8 +142,8 @@ jobs:
             chmod 600 ssl/private.key
             
             # Update docker-compose to use GitHub Container Registry
-            sed -i 's|build: ./backend|image: ghcr.io/${{ github.repository }}-backend:latest|g' docker-compose.yml
-            sed -i 's|build: ./frontend|image: ghcr.io/${{ github.repository }}-frontend:latest|g' docker-compose.yml
+            sed -i 's|build: ./backend|image: ghcr.io/nopass0/voice-backend:latest|g' docker-compose.yml
+            sed -i 's|build: ./frontend|image: ghcr.io/nopass0/voice-frontend:latest|g' docker-compose.yml
             sed -i '/context:/d' docker-compose.yml
             sed -i '/dockerfile:/d' docker-compose.yml
             
@@ -151,8 +151,8 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
             # Pull latest images
-            docker pull ghcr.io/${{ github.repository }}-backend:latest
-            docker pull ghcr.io/${{ github.repository }}-frontend:latest
+            docker pull ghcr.io/nopass0/voice-backend:latest
+            docker pull ghcr.io/nopass0/voice-frontend:latest
             
             # Stop existing containers
             docker-compose down
