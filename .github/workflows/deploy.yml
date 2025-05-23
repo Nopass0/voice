@@ -72,7 +72,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          source: "docker-compose.yml,nginx/,ssl/,.env.example"
+          source: "docker-compose.yml,nginx/,ssl/fullchain.pem,ssl/voicecxr.pro.csr,.env.example"
           target: "/opt/voice"
           strip_components: 0
       
@@ -132,13 +132,16 @@ jobs:
             # Ensure SSL directory exists with correct permissions
             run_cmd mkdir -p /opt/voice/ssl
             
-            # Set correct permissions for SSL files
-            if [ -f /opt/voice/ssl/private.key ]; then
+            # Create SSL private key from secret
+            if [ ! -z "${{ secrets.SSL_PRIVATE_KEY }}" ]; then
+              echo "${{ secrets.SSL_PRIVATE_KEY }}" > /opt/voice/ssl/private.key
               run_cmd chmod 600 /opt/voice/ssl/private.key
               run_cmd chown root:root /opt/voice/ssl/private.key
             fi
             
-            if [ -f /opt/voice/ssl/fullchain.pem ]; then
+            # Create SSL certificate from secret if not already present
+            if [ ! -f /opt/voice/ssl/fullchain.pem ] && [ ! -z "${{ secrets.SSL_FULLCHAIN }}" ]; then
+              echo "${{ secrets.SSL_FULLCHAIN }}" > /opt/voice/ssl/fullchain.pem
               run_cmd chmod 644 /opt/voice/ssl/fullchain.pem
               run_cmd chown root:root /opt/voice/ssl/fullchain.pem
             fi
@@ -146,11 +149,13 @@ jobs:
             # Verify SSL files exist
             if [ ! -f /opt/voice/ssl/private.key ]; then
               echo "ERROR: SSL private key not found at /opt/voice/ssl/private.key"
+              echo "Please add SSL_PRIVATE_KEY to GitHub secrets"
               exit 1
             fi
             
             if [ ! -f /opt/voice/ssl/fullchain.pem ]; then
               echo "ERROR: SSL certificate not found at /opt/voice/ssl/fullchain.pem"
+              echo "Please add SSL_FULLCHAIN to GitHub secrets or ensure it's copied"
               exit 1
             fi
             
